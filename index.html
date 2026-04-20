@@ -25,7 +25,8 @@ body { font-family: Arial; margin: 20px; }
 <div id="chat"></div>
 
 <script>
-let username = sessionStorage.getItem("user");
+const params = new URLSearchParams(window.location.search);
+let username = params.get("user");
 let password = sessionStorage.getItem("pass");
 
 // POPUP initiale
