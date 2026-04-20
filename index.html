@@ -1,72 +1,145 @@
-<?php
-
-$error = "";
-
-/**
- * Retourne le username si le hash match
- */
-function findUserByPassword($file, $hashInput) {
-    if (!file_exists($file)) return null;
-
-    $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-
-    foreach ($lines as $line) {
-        [$user, $hash] = explode(":", trim($line), 2);
-
-        if (hash_equals($hash, $hashInput)) {
-            return $user;
-        }
-    }
-
-    return null;
-}
-
-if ($_SERVER["REQUEST_METHOD"] === "POST") {
-
-    $password = $_POST['password'] ?? '';
-    $hashInput = hash('sha256', $password);
-
-    $user = findUserByPassword(
-        "u06PWp1Sg6X1IRyetJgx7kvQ6piG0W0BgenZVYhYz7ayua5t7U.txt",
-        $hashInput
-    );
-
-    if ($user !== null) {
-
-        // On envoie l'utilisateur au front
-
-        echo "<script>
-            sessionStorage.setItem('user', " . json_encode($user) . ");
-            window.location.href = 'index.html';
-        </script>";
-        exit;
-
-    } else {
-        $error = "Qui es tu ?";
-    }
-}
-?>
-
 <!DOCTYPE html>
 <html lang="fr">
-<html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta charset="UTF-8">
-    <title>Login</title>
+<title>Chat chiffré</title>
+<style>
+body { font-family: Arial; margin: 20px; }
+#chat { margin-top: 20px; }
+.msg {
+    padding: 8px;
+    border: 1px solid #ccc;
+    margin: 5px 0;
+    cursor: pointer;
+}
+</style>
 </head>
 <body>
 
-<h2>Bienvenue !</h2>
+<h2>🤩Amusez-vous !</h2>
 
-<form method="POST">
-    <input type="text" name="password" placeholder="Nom" required>
-    <button type="submit">Connexion</button>
-</form>
+<input id="msgInput" placeholder="Écris ton message..." />
+<button onclick="sendMessage()">Envoyer</button>
 
-<p style="color:red;">
-    <?= $error ?>
-</p>
+<div id="chat"></div>
+
+<script>
+let username = sessionStorage.getItem("user");
+let password = sessionStorage.getItem("pass");
+
+// POPUP initiale
+if (!username) {
+    window.location.href = "https://kyra.alwaysdata.net";
+}
+
+if (!password) {
+    password = prompt("Mot de passe ?");
+    sessionStorage.setItem("pass", password);
+}
+
+// --- AES KEY DERIVATION (SHA-256 du mot de passe)
+async function getKey() {
+    const enc = new TextEncoder();
+    const hash = await crypto.subtle.digest("SHA-256", enc.encode(password));
+    return crypto.subtle.importKey(
+        "raw",
+        hash,
+        "AES-GCM",
+        false,
+        ["encrypt", "decrypt"]
+    );
+}
+
+// --- ENCRYPT
+async function encrypt(text) {
+    const key = await getKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+
+    const cipher = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        enc.encode(text)
+    );
+
+    const buf = new Uint8Array(iv.length + cipher.byteLength);
+    buf.set(iv, 0);
+    buf.set(new Uint8Array(cipher), iv.length);
+
+    return btoa(String.fromCharCode(...buf));
+}
+
+// --- DECRYPT
+async function decrypt(data) {
+    const key = await getKey();
+    const buf = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+
+    const iv = buf.slice(0, 12);
+    const cipher = buf.slice(12);
+
+    const plain = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        cipher
+    );
+
+    return new TextDecoder().decode(plain);
+}
+
+// --- SEND MESSAGE
+async function sendMessage() {
+    const input = document.getElementById("msgInput");
+    const text = input.value;
+
+    const cipher = await encrypt(text);
+
+    fetch("https://kyra.alwaysdata.net/send.php", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: `user=${username}&msg=${encodeURIComponent(cipher)}`
+    });
+
+    input.value = "";
+}
+
+// --- LOAD MESSAGES
+async function loadMessages() {
+    const res = await fetch("https://kyra.alwaysdata.net/get.php");
+    const data = await res.json();
+
+    const chat = document.getElementById("chat");
+    chat.innerHTML = "";
+
+    for (let m of data) {
+        const div = document.createElement("div");
+        div.className = "msg";
+        div.textContent = m.user + " : (clique pour voir)";
+
+        div.onclick = async () => {
+            const clear = await decrypt(m.msg);
+            div.textContent = m.user + " : " + clear;
+
+            // suppression après 10s
+            setTimeout(() => {
+                fetch("https://kyra.alwaysdata.net/delete.php?id=" + m.id);
+                div.remove();
+            }, 10000);
+        };
+
+        chat.appendChild(div);
+    }
+}
+
+setInterval(loadMessages, 5000);
+loadMessages();
+
+document.getElementById("msgInput").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") {
+        sendMessage();
+    }
+});
+</script>
 
 </body>
 </html>
